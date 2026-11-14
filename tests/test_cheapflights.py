@@ -155,26 +155,32 @@ def test_alert_dedupe_covers_both_airports(conn, cfg):
     assert detector.find_deals(conn, [fare(440, origin="SJC")], cfg) == []
 
 
-# --- long-term weekly history -----------------------------------------------
+# --- long-term quarterly history --------------------------------------------
 
-def test_weekly_rollup_export_and_reload(conn, tmp_path):
-    today = date.today()
-    this_monday = history.week_start(today)
-    last_monday = this_monday - timedelta(days=7)
-    for i, p in enumerate([400, 500, 600, 700]):
-        db.insert_fares(conn, [fare(p, depart=f"2027-02-{i + 1:02d}")],
-                        seen_day=(last_monday + timedelta(days=i)).isoformat())
-    db.insert_fares(conn, [fare(100, depart="2027-02-20")], seen_day=today.isoformat())  # unfinished week
+def test_quarter_helpers():
+    assert history.quarter_of(date(2026, 11, 14)) == "2026-Q4"
+    assert history.quarter_of(date(2027, 3, 31)) == "2027-Q1"
+    assert history.quarter_bounds("2026-Q4") == (date(2026, 10, 1), date(2026, 12, 31))
+    assert history.quarter_bounds("2027-Q2") == (date(2027, 4, 1), date(2027, 6, 30))
 
-    assert history.rollup(conn, today) == [last_monday.isoformat()]
+
+def test_quarterly_rollup_export_and_reload(conn, tmp_path):
+    # Pretend "today" is 2027-01-15: 2026-Q4 is finished, 2027-Q1 isn't.
+    for i, (day, p) in enumerate([("2026-10-02", 400), ("2026-11-10", 500),
+                                  ("2026-12-01", 600), ("2026-12-31", 700)]):
+        db.insert_fares(conn, [fare(p, depart=f"2027-02-{i + 1:02d}")], seen_day=day)
+    db.insert_fares(conn, [fare(100, depart="2027-02-20")], seen_day="2027-01-05")  # unfinished quarter
+    today = date(2027, 1, 15)
+
+    assert history.rollup(conn, today) == ["2026-Q4"]
     assert history.rollup(conn, today) == []  # already done
-    row = conn.execute("SELECT * FROM route_weekly").fetchone()
+    row = conn.execute("SELECT * FROM route_quarterly").fetchone()
     assert (row["n"], row["min_price"], row["median_price"], row["max_price"]) == (4, 400, 550, 700)
 
     files = history.export(conn, str(tmp_path))
-    assert [f.name for f in files] == [f"{last_monday.isoformat()}.csv"]
+    assert [f.name for f in files] == ["2026-Q4.csv"]
     assert history.export(conn, str(tmp_path)) == []  # written once
 
     fresh = db.connect(":memory:")  # e.g. the cache was wiped
     assert history.load(fresh, str(tmp_path)) == 1
-    assert fresh.execute("SELECT median_price FROM route_weekly").fetchone()[0] == 550
+    assert fresh.execute("SELECT median_price FROM route_quarterly").fetchone()[0] == 550

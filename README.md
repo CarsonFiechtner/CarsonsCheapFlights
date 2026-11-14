@@ -16,7 +16,7 @@ every 4h ─▶ Travelpayouts cached fares ─▶ compare to route's 90-day hist
    to every destination from the [Travelpayouts Data API](https://support.travelpayouts.com/hc/en-us/articles/203956163).
    These are prices Aviasales users found recently. They're free, but they can be stale.
 2. **Remember**: it keeps the cheapest price per itinerary per day in SQLite (`data/prices.sqlite`) for
-   a year, and a weekly summary of every destination forever (see below).
+   a year, and a quarterly summary of every destination forever (see below).
 3. **Detect**: SFO and SJC are treated as one home area. A destination's "normal price" is the
    cheapest price from either airport for each itinerary, each day. A fare is a deal when it's
    **≥40% below that median**, **≥$150 below it**,
@@ -31,8 +31,10 @@ every 4h ─▶ Travelpayouts cached fares ─▶ compare to route's 90-day hist
 
 ## Setup
 
-1. **Travelpayouts token (free).** Sign up at travelpayouts.com, join the Aviasales program, and copy
-   your API token from your profile.
+1. **Travelpayouts token (free).** Sign up at travelpayouts.com and join the **Aviasales** program.
+   On the Tools page use **Data API**, not Links API or Data Files. The token is a 32-character
+   string; Travelpayouts shows it in your profile/API settings ("Learn how to access" on the Data
+   API card links to the exact steps).
 2. **Gmail app password.** Google Account → Security → 2-Step Verification → App passwords.
 3. **GitHub secrets.** Repo → Settings → Secrets and variables → Actions → add `TRAVELPAYOUTS_TOKEN`,
    `SMTP_USER`, `SMTP_PASSWORD` and `ALERT_TO`.
@@ -56,21 +58,22 @@ No third-party packages are needed. Run the tests with `pip install pytest && py
 |---|---|---|---|
 | Individual prices (`data/prices.sqlite`) | GitHub Actions cache, a new copy saved every run | 1 year (`RAW_KEEP_DAYS`) | Restored from the newest daily backup automatically |
 | Daily database backup (gzipped) | Workflow artifacts (`prices-backup-*`) | 7 days | n/a |
-| Weekly summaries | `history` branch, `weekly/YYYY-MM-DD.csv` | Forever | n/a: it's in git |
+| Quarterly summaries | `history` branch, `quarterly/2026-Q4.csv` etc. | Forever | n/a: it's in git |
 
-Each weekly CSV has one row per origin, destination and departure month for that week, with the count,
-min, 25th percentile, median and max price. A week's file is written once the week ends (Monday–Sunday,
-UTC) and never changes. That's about 25 MB a year at most. These files keep long-term trends (seasonality, year over
-year) after the individual prices are deleted.
+Each quarterly CSV has one row per origin, destination and departure month, summarizing every price
+seen during that calendar quarter: count, min, 25th percentile, median and max. A quarter's file is
+written once the quarter ends and never changes. These files keep long-term trends (seasonality,
+year over year) after the individual prices are deleted. Because individual prices are kept for a
+year, you can still look at any recent stretch in full detail.
 
 **If the cache is lost** (GitHub only evicts it after 7 days with no runs, or when the repo passes
 10 GB of cache, oldest first), the next run restores the newest backup automatically. That loses at
 most a day of prices. If the backups have expired too, it starts fresh and re-learns normal prices,
-and the weekly summaries are still reloaded from the `history` branch.
+and the quarterly summaries are still reloaded from the `history` branch.
 
-GitHub turns off scheduled workflows in public repos after 60 days without activity. The weekly
-commits to `history` should count as activity. If the workflow ever gets turned off, re-enable it
-from the Actions tab.
+GitHub turns off scheduled workflows in public repos after 60 days without activity. Each run
+re-enables the workflow through the API to prevent that. If it ever gets turned off anyway (GitHub
+emails you first), re-enable it from the Actions tab.
 
 ## Tuning
 
