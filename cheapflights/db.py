@@ -101,6 +101,22 @@ def route_prices(conn: sqlite3.Connection, origins: list[str] | str, destination
     return [r["price"] for r in cur]
 
 
+def route_history_days(conn: sqlite3.Connection, origins: list[str] | str, destination: str,
+                       history_days: int) -> int:
+    """How many different days we've seen round-trip prices to `destination` on."""
+    if isinstance(origins, str):
+        origins = [origins]
+    marks = ",".join("?" * len(origins))
+    return conn.execute(
+        f"""
+        SELECT COUNT(DISTINCT seen_day) FROM price_observations
+        WHERE origin IN ({marks}) AND destination = ? AND return_date != ''
+          AND seen_day >= date('now', ?)
+        """,
+        (*origins, destination, f"-{history_days} days"),
+    ).fetchone()[0]
+
+
 def last_alert(conn: sqlite3.Connection, origin: str, destination: str, depart_month: str):
     return conn.execute(
         "SELECT price, sent_at, julianday('now') - julianday(sent_at) AS age_days FROM alerts_sent"

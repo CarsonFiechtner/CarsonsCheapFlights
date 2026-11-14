@@ -20,14 +20,14 @@ every 4h ─▶ Travelpayouts cached fares ─▶ compare to route's 90-day hist
 3. **Detect**: SFO and SJC are treated as one home area. A destination's "normal price" is the
    cheapest price from either airport for each itinerary, each day. A fare is a deal when it's
    **≥40% below that median**, **≥$150 below it**,
-   **at or below the 25th percentile**, and the route has **≥8 data points**. ≥70% off is flagged as a
+   **at or below the 25th percentile**, and the destination has **≥8 prices seen on ≥7 different days**. ≥70% off is flagged as a
    possible mistake fare. Itineraries with more than 2 stops each way are skipped.
 4. **Email**: you get one email per run with one deal per destination and month: the cheaper airport,
    with the other listed as "also from SJC: $480" when it's also a deal. Each has a pre-filled Google
    Flights link so you can confirm the price before booking. The same destination and month isn't
    re-sent for 14 days unless the price drops another 10%.
 
-**Expect a quiet first week or two.** Most routes need about 8 data points before they can trigger a deal.
+**Expect a quiet first week or two.** A destination needs prices from at least 7 different days before it can trigger a deal.
 
 ## Setup
 

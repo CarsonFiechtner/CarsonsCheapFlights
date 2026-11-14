@@ -34,7 +34,8 @@ class Config:
     # Deal rule: a fare is a deal when ALL of these hold.
     min_pct_off: float = 0.40        # at least 40% below the route's median
     min_dollars_off: float = 150.0   # and at least $150 below it
-    min_samples: int = 8             # and we've seen the route enough to trust the median
+    min_samples: int = 8             # and we've seen the route enough to trust the median...
+    min_history_days: int = 7        # ...on at least this many different days
     mistake_pct_off: float = 0.70    # 70%+ off gets flagged as a likely mistake fare
     max_stops: int = 2               # ignore itineraries with more stops each way
     history_days: int = 90           # how far back the "normal price" looks
@@ -66,6 +67,7 @@ class Config:
         c.min_pct_off = float(e("MIN_PCT_OFF", c.min_pct_off))
         c.min_dollars_off = float(e("MIN_DOLLARS_OFF", c.min_dollars_off))
         c.min_samples = int(e("MIN_SAMPLES", c.min_samples))
+        c.min_history_days = int(e("MIN_HISTORY_DAYS", c.min_history_days))
         c.mistake_pct_off = float(e("MISTAKE_PCT_OFF", c.mistake_pct_off))
         c.max_stops = int(e("MAX_STOPS", c.max_stops))
         c.history_days = int(e("HISTORY_DAYS", c.history_days))

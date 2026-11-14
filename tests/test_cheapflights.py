@@ -83,6 +83,13 @@ def test_cheap_route_needs_minimum_dollar_savings(conn, cfg):
     assert detector.find_deals(conn, [fare(110, dest="LAX")], cfg) == []
 
 
+def test_single_scan_is_not_enough_history(conn, cfg):
+    # Lots of prices, but all seen on one day (one scan): not a baseline yet.
+    for i in range(20):
+        db.insert_fares(conn, [fare(1000, depart=f"2027-03-{i + 1:02d}", ret="2027-04-01")])
+    assert detector.find_deals(conn, [fare(300)], cfg) == []
+
+
 def test_not_enough_history(conn, cfg):
     seed_history(conn, [1000, 1000, 1000])
     assert detector.find_deals(conn, [fare(300)], cfg) == []

@@ -36,9 +36,14 @@ def passes_quality(fare: Fare, cfg: Config) -> bool:
     return True
 
 
-def evaluate(fare: Fare, prices: list[float], cfg: Config) -> Deal | None:
+def evaluate(fare: Fare, prices: list[float], cfg: Config, days_seen: int | None = None) -> Deal | None:
+    """`days_seen` is how many different days the prices came from. One scan has
+    many dates per destination, so without this a single scan would look like
+    plenty of history and the cheapest dates would be flagged against the dearest."""
     stats = route_stats(prices)
     if stats is None or len(prices) < cfg.min_samples:
+        return None
+    if days_seen is not None and days_seen < cfg.min_history_days:
         return None
     median, p25 = stats
     if median <= 0:
@@ -63,13 +68,17 @@ def find_deals(conn: sqlite3.Connection, fares: list[Fare], cfg: Config) -> list
     """Best new deal per (destination, departure month) across home airports, best first."""
     # Cheapest qualifying deal per (destination, month, origin).
     per_origin: dict[tuple[str, str], dict[str, Deal]] = {}
-    cache: dict[str, list[float]] = {}
+    cache: dict[str, tuple[list[float], int]] = {}
     for fare in fares:
         if not passes_quality(fare, cfg):
             continue
         if fare.destination not in cache:
-            cache[fare.destination] = db.route_prices(conn, cfg.origins, fare.destination, cfg.history_days)
-        deal = evaluate(fare, cache[fare.destination], cfg)
+            cache[fare.destination] = (
+                db.route_prices(conn, cfg.origins, fare.destination, cfg.history_days),
+                db.route_history_days(conn, cfg.origins, fare.destination, cfg.history_days),
+            )
+        prices, days_seen = cache[fare.destination]
+        deal = evaluate(fare, prices, cfg, days_seen)
         if deal is None:
             continue
         group = per_origin.setdefault((fare.destination, fare.depart_month), {})
