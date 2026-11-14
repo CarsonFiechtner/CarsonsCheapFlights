@@ -1,0 +1,13 @@
+[project]
+name = "cheapflights"
+version = "0.1.0"
+description = "Personal cheap-flight deal tracker that emails you when fares drop"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

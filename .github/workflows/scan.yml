@@ -1,0 +1,64 @@
+name: Scan for flight deals
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"   # every 4 hours
+  workflow_dispatch:          # lets you run it by hand from the Actions tab
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The price history lives in the Actions cache. Each run restores the
+      # newest copy and saves a new one, so there's nothing to commit.
+      - name: Restore price history
+        uses: actions/cache/restore@v4
+        with:
+          path: data/prices.sqlite
+          key: prices-${{ github.run_id }}
+          restore-keys: prices-
+
+      - name: Scan and email deals
+        env:
+          TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_TO: ${{ secrets.ALERT_TO }}
+          ORIGINS: ${{ vars.ORIGINS || 'SFO,SJC' }}
+        run: python -m cheapflights run
+
+      - name: Save price history
+        if: always() && hashFiles('data/prices.sqlite') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/prices.sqlite
+          key: prices-${{ github.run_id }}
+
+      # Caches can be evicted, so keep a downloadable copy once a week
+      # (first run on Sunday, UTC) and on manual runs.
+      - name: Check if backup is due
+        id: backup
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || \
+             { [ "$(date -u +%u)" = 7 ] && [ "$(date -u +%H)" -lt 4 ]; }; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Back up price history
+        if: steps.backup.outputs.due == 'true' && hashFiles('data/prices.sqlite') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: prices-backup
+          path: data/prices.sqlite
+          retention-days: 30
