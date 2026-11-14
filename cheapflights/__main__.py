@@ -32,11 +32,11 @@ def scan(conn, cfg: Config):
 
 
 def update_history(conn, cfg: Config) -> None:
-    """Summarize finished quarters, save them as CSVs, then drop old individual prices."""
-    quarters = history.rollup(conn)
+    """Summarize finished months, save them as CSVs, then drop old individual prices."""
+    months = history.rollup(conn)
     files = history.export(conn, cfg.history_dir)
-    if quarters or files:
-        log.info("summarized %s; wrote %d CSV file(s) to %s", quarters, len(files), cfg.history_dir)
+    if months or files:
+        log.info("summarized %s; wrote %d CSV file(s) to %s", months, len(files), cfg.history_dir)
     db.prune(conn, max(cfg.raw_keep_days, cfg.history_days, history.MIN_RAW_KEEP_DAYS))
 
 
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     conn = db.connect(cfg.db_path)
-    # Restore quarterly summaries from the CSVs (matters only if the database was lost).
+    # Restore monthly summaries from the CSVs (matters only if the database was lost).
     history.load(conn, cfg.history_dir)
     fares, deals = scan(conn, cfg)
     update_history(conn, cfg)

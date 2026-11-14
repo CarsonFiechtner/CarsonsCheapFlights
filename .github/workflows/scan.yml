@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # to push quarterly summaries to the `history` branch
-  actions: write    # to find database backups, and to keep the schedule from being auto-disabled
+  contents: write   # to push monthly summaries to the `history` branch
+  actions: read     # to find the newest database backup if the cache is gone
 
 jobs:
   scan:
@@ -47,7 +47,7 @@ jobs:
           unzip -o backup.zip -d data && gunzip -f data/prices.sqlite.gz && rm backup.zip
           echo "Restored database from backup artifact $id"
 
-      # Long-term quarterly summaries live on the `history` branch, forever.
+      # Long-term monthly summaries live on the `history` branch, forever.
       - name: Check out history branch
         run: |
           if git fetch --depth=1 origin history:refs/remotes/origin/history; then
@@ -63,7 +63,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_TO: ${{ secrets.ALERT_TO }}
           ORIGINS: ${{ vars.ORIGINS || 'SFO,SJC' }}
-          HISTORY_DIR: history-tree/quarterly
+          HISTORY_DIR: history-tree/monthly
         run: python -m cheapflights run
 
       - name: Save price database
@@ -73,26 +73,19 @@ jobs:
           path: data/prices.sqlite
           key: prices-${{ github.run_id }}
 
-      - name: Push new quarterly summaries
+      - name: Push new monthly summaries
         if: always()
         working-directory: history-tree
         run: |
           git add -A
-          if git diff --cached --quiet; then echo "No new quarters"; exit 0; fi
+          if git diff --cached --quiet; then echo "No new months"; exit 0; fi
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "Quarterly price summaries $(date -u +%F)"
+              commit -m "Monthly price summaries $(date -u +%F)"
           git push origin history
 
-      # GitHub disables scheduled workflows in public repos after 60 days with no
-      # repository activity. Quarterly commits aren't frequent enough, so re-enable
-      # this workflow through the API on each run (the same approach the popular
-      # keepalive-workflow action uses).
-      - name: Keep schedule alive
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/scan.yml/enable" || true
+      # This monthly commit also keeps the repo "active", so GitHub doesn't
+      # disable the schedule after 60 days without activity (public repos).
 
       # The cache is only lost if no run happens for 7 days, so a daily copy is
       # plenty: first run after midnight UTC, plus every manual run.

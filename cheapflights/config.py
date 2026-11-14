@@ -38,8 +38,8 @@ class Config:
     mistake_pct_off: float = 0.70    # 70%+ off gets flagged as a likely mistake fare
     max_stops: int = 2               # ignore itineraries with more stops each way
     history_days: int = 90           # how far back the "normal price" looks
-    raw_keep_days: int = 365         # delete individual prices older than this (quarterly summaries are kept forever)
-    history_dir: str = "data/history"  # quarterly summary CSVs; on GitHub this is on the `history` branch
+    raw_keep_days: int = 365         # delete individual prices older than this (monthly summaries are kept forever)
+    history_dir: str = "data/history"  # monthly summary CSVs; on GitHub this is on the `history` branch
     realert_days: int = 14           # don't re-send the same deal for this long...
     realert_drop: float = 0.10       # ...unless the price dropped another 10%
 

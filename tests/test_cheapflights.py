@@ -155,32 +155,31 @@ def test_alert_dedupe_covers_both_airports(conn, cfg):
     assert detector.find_deals(conn, [fare(440, origin="SJC")], cfg) == []
 
 
-# --- long-term quarterly history --------------------------------------------
+# --- long-term monthly history ----------------------------------------------
 
-def test_quarter_helpers():
-    assert history.quarter_of(date(2026, 11, 14)) == "2026-Q4"
-    assert history.quarter_of(date(2027, 3, 31)) == "2027-Q1"
-    assert history.quarter_bounds("2026-Q4") == (date(2026, 10, 1), date(2026, 12, 31))
-    assert history.quarter_bounds("2027-Q2") == (date(2027, 4, 1), date(2027, 6, 30))
+def test_month_helpers():
+    assert history.month_of(date(2026, 11, 14)) == "2026-11"
+    assert history.month_bounds("2026-12") == (date(2026, 12, 1), date(2026, 12, 31))
+    assert history.month_bounds("2028-02") == (date(2028, 2, 1), date(2028, 2, 29))
 
 
-def test_quarterly_rollup_export_and_reload(conn, tmp_path):
-    # Pretend "today" is 2027-01-15: 2026-Q4 is finished, 2027-Q1 isn't.
-    for i, (day, p) in enumerate([("2026-10-02", 400), ("2026-11-10", 500),
-                                  ("2026-12-01", 600), ("2026-12-31", 700)]):
+def test_monthly_rollup_export_and_reload(conn, tmp_path):
+    # Pretend "today" is 2026-12-15: November is finished, December isn't.
+    for i, (day, p) in enumerate([("2026-11-01", 400), ("2026-11-10", 500),
+                                  ("2026-11-20", 600), ("2026-11-30", 700)]):
         db.insert_fares(conn, [fare(p, depart=f"2027-02-{i + 1:02d}")], seen_day=day)
-    db.insert_fares(conn, [fare(100, depart="2027-02-20")], seen_day="2027-01-05")  # unfinished quarter
-    today = date(2027, 1, 15)
+    db.insert_fares(conn, [fare(100, depart="2027-02-20")], seen_day="2026-12-05")  # unfinished month
+    today = date(2026, 12, 15)
 
-    assert history.rollup(conn, today) == ["2026-Q4"]
+    assert history.rollup(conn, today) == ["2026-11"]
     assert history.rollup(conn, today) == []  # already done
-    row = conn.execute("SELECT * FROM route_quarterly").fetchone()
+    row = conn.execute("SELECT * FROM route_monthly").fetchone()
     assert (row["n"], row["min_price"], row["median_price"], row["max_price"]) == (4, 400, 550, 700)
 
     files = history.export(conn, str(tmp_path))
-    assert [f.name for f in files] == ["2026-Q4.csv"]
+    assert [f.name for f in files] == ["2026-11.csv"]
     assert history.export(conn, str(tmp_path)) == []  # written once
 
     fresh = db.connect(":memory:")  # e.g. the cache was wiped
     assert history.load(fresh, str(tmp_path)) == 1
-    assert fresh.execute("SELECT median_price FROM route_quarterly").fetchone()[0] == 550
+    assert fresh.execute("SELECT median_price FROM route_monthly").fetchone()[0] == 550

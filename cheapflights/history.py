@@ -1,14 +1,15 @@
-"""Long-term price history as quarterly summaries.
+"""Long-term price history as monthly summaries.
 
 Individual prices are deleted after `raw_keep_days`, but before that every
-finished calendar quarter (by the day prices were seen) is boiled down to one
+finished calendar month (by the day prices were seen) is boiled down to one
 row per (origin, destination, departure month) with count, min, 25th
 percentile, median and max. These summaries are kept forever: in the
-`route_quarterly` table and as one CSV per quarter in `history_dir`. On GitHub
+`route_monthly` table and as one CSV per month in `history_dir`. On GitHub
 that directory is on the `history` branch, so it survives even if the database
-is lost.
+is lost. The monthly commit also counts as repository activity, which stops
+GitHub from disabling the schedule after 60 idle days.
 
-Each quarter's CSV is written once, after the quarter ends, and never changes.
+Each month's CSV is written once, after the month ends, and never changes.
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS route_quarterly (
-    quarter      TEXT NOT NULL,   -- e.g. 2026-Q4
+CREATE TABLE IF NOT EXISTS route_monthly (
+    seen_month   TEXT NOT NULL,   -- YYYY-MM the prices were observed
     origin       TEXT NOT NULL,
     destination  TEXT NOT NULL,
     depart_month TEXT NOT NULL,   -- YYYY-MM
@@ -31,30 +32,30 @@ CREATE TABLE IF NOT EXISTS route_quarterly (
     p25_price    REAL NOT NULL,
     median_price REAL NOT NULL,
     max_price    REAL NOT NULL,
-    PRIMARY KEY (quarter, origin, destination, depart_month)
+    PRIMARY KEY (seen_month, origin, destination, depart_month)
 ) WITHOUT ROWID;
 """
 
-FIELDS = ["quarter", "origin", "destination", "depart_month", "n",
+FIELDS = ["seen_month", "origin", "destination", "depart_month", "n",
           "min_price", "p25_price", "median_price", "max_price"]
 
-# Individual prices must outlive the longest quarter plus some slack, or a
-# quarter could be partly deleted before it's summarized.
-MIN_RAW_KEEP_DAYS = 100
+# Individual prices must outlive the longest month plus some slack, or a
+# month could be partly deleted before it's summarized.
+MIN_RAW_KEEP_DAYS = 40
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
 
 
-def quarter_of(day: date) -> str:
-    return f"{day.year}-Q{(day.month - 1) // 3 + 1}"
+def month_of(day: date) -> str:
+    return day.isoformat()[:7]
 
 
-def quarter_bounds(quarter: str) -> tuple[date, date]:
-    year, q = int(quarter[:4]), int(quarter[-1])
-    start = date(year, 3 * (q - 1) + 1, 1)
-    next_start = date(year + 1, 1, 1) if q == 4 else date(year, 3 * q + 1, 1)
+def month_bounds(month: str) -> tuple[date, date]:
+    year, m = int(month[:4]), int(month[5:7])
+    start = date(year, m, 1)
+    next_start = date(year + 1, 1, 1) if m == 12 else date(year, m + 1, 1)
     return start, next_start - timedelta(days=1)
 
 
@@ -65,45 +66,44 @@ def _summarize(prices: list[float]) -> tuple[int, float, float, float, float]:
 
 
 def rollup(conn: sqlite3.Connection, today: date | None = None) -> list[str]:
-    """Summarize every finished quarter that isn't summarized yet. Returns the quarters added."""
+    """Summarize every finished month that isn't summarized yet. Returns the months added."""
     ensure_schema(conn)
-    current = quarter_of(today or date.today())
-    done = {r[0] for r in conn.execute("SELECT DISTINCT quarter FROM route_quarterly")}
-    seen = {quarter_of(date.fromisoformat(r[0])) for r in
-            conn.execute("SELECT DISTINCT seen_day FROM price_observations")}
-    todo = sorted(q for q in seen - done if q < current)
+    current = month_of(today or date.today())
+    done = {r[0] for r in conn.execute("SELECT DISTINCT seen_month FROM route_monthly")}
+    seen = {r[0] for r in conn.execute("SELECT DISTINCT substr(seen_day, 1, 7) FROM price_observations")}
+    todo = sorted(m for m in seen - done if m < current)
 
-    for quarter in todo:
-        start, end = quarter_bounds(quarter)
+    for month in todo:
+        start, end = month_bounds(month)
         groups: dict[tuple[str, str, str], list[float]] = defaultdict(list)
         rows = conn.execute(
             "SELECT origin, destination, substr(depart_date, 1, 7), price FROM price_observations"
             " WHERE return_date != '' AND seen_day BETWEEN ? AND ?",
             (start.isoformat(), end.isoformat()),
         )
-        for origin, dest, month, price in rows:
-            groups[(origin, dest, month)].append(price)
+        for origin, dest, depart_month, price in rows:
+            groups[(origin, dest, depart_month)].append(price)
         conn.executemany(
-            "INSERT OR IGNORE INTO route_quarterly VALUES (?,?,?,?,?,?,?,?,?)",
-            [(quarter, o, d, m, *_summarize(p)) for (o, d, m), p in groups.items()],
+            "INSERT OR IGNORE INTO route_monthly VALUES (?,?,?,?,?,?,?,?,?)",
+            [(month, o, d, m, *_summarize(p)) for (o, d, m), p in groups.items()],
         )
     conn.commit()
     return todo
 
 
 def export(conn: sqlite3.Connection, directory: str) -> list[Path]:
-    """Write a CSV for each summarized quarter that doesn't have one yet."""
+    """Write a CSV for each summarized month that doesn't have one yet."""
     ensure_schema(conn)
     out = Path(directory)
     out.mkdir(parents=True, exist_ok=True)
     written = []
-    for (quarter,) in conn.execute("SELECT DISTINCT quarter FROM route_quarterly ORDER BY quarter").fetchall():
-        path = out / f"{quarter}.csv"
+    for (month,) in conn.execute("SELECT DISTINCT seen_month FROM route_monthly ORDER BY seen_month").fetchall():
+        path = out / f"{month}.csv"
         if path.exists():
             continue
         rows = conn.execute(
-            f"SELECT {', '.join(FIELDS)} FROM route_quarterly WHERE quarter = ?"
-            " ORDER BY origin, destination, depart_month", (quarter,))
+            f"SELECT {', '.join(FIELDS)} FROM route_monthly WHERE seen_month = ?"
+            " ORDER BY origin, destination, depart_month", (month,))
         with path.open("w", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(FIELDS)
@@ -113,13 +113,13 @@ def export(conn: sqlite3.Connection, directory: str) -> list[Path]:
 
 
 def load(conn: sqlite3.Connection, directory: str) -> int:
-    """Load quarterly CSVs into the database (e.g. after the database was lost). Safe to repeat."""
+    """Load monthly CSVs into the database (e.g. after the database was lost). Safe to repeat."""
     ensure_schema(conn)
     count = 0
     for path in sorted(Path(directory).glob("*.csv")):
         with path.open(newline="") as fh:
             rows = [tuple(r[f] for f in FIELDS) for r in csv.DictReader(fh)]
-        conn.executemany("INSERT OR IGNORE INTO route_quarterly VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        conn.executemany("INSERT OR IGNORE INTO route_monthly VALUES (?,?,?,?,?,?,?,?,?)", rows)
         count += len(rows)
     conn.commit()
     return count
