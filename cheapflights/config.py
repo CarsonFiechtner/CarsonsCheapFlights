@@ -33,7 +33,7 @@ class Config:
 
     # Deal rule: a fare is a deal when ALL of these hold.
     min_pct_off: float = 0.40        # at least 40% below the route's median
-    min_dollars_off: float = 150.0   # and at least $150 below it
+    min_dollars_off: float = 200.0   # and at least $200 below it (filters out cheap short hops)
     min_samples: int = 8             # and we've seen the route enough to trust the median...
     min_history_days: int = 7        # ...on at least this many different days
     mistake_pct_off: float = 0.70    # 70%+ off gets flagged as a likely mistake fare

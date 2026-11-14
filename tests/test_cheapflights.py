@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from cheapflights import db, detector, history, notify, travelpayouts
+from cheapflights import db, detector, history, notify, places, travelpayouts
 from cheapflights.config import Config
 from cheapflights.models import Fare
 
@@ -128,7 +128,8 @@ def test_email_rendering():
     assert "2027-02-10" in url and "NRT" in url
     from cheapflights.models import Deal
     d = Deal(f, baseline=1000, p25=900, samples=20, is_mistake=False)
-    assert notify.subject([d]) == "SFO→NRT $389 (61% off)"
+    assert notify.subject([d]) == "SFO → NRT $389 (61% off)"
+    assert notify.subject([d], {"NRT": "Tokyo"}) == "SFO → Tokyo (NRT) $389 (61% off)"
     text, body = notify.render([d])
     assert "$389" in text and "Check on Google Flights" in body
 
@@ -190,3 +191,38 @@ def test_monthly_rollup_export_and_reload(conn, tmp_path):
     fresh = db.connect(":memory:")  # e.g. the cache was wiped
     assert history.load(fresh, str(tmp_path)) == 1
     assert fresh.execute("SELECT median_price FROM route_monthly").fetchone()[0] == 550
+
+
+# --- city names ---------------------------------------------------------------
+
+def test_place_names_from_cities_and_airports():
+    cities = [{"code": "TYO", "name": "Tokyo", "name_translations": {"en": "Tokyo"}},
+              {"code": "LAS", "name": "Las Vegas"}]
+    airports = [{"code": "NRT", "city_code": "TYO"}, {"code": "HND", "city_code": "TYO"},
+                {"code": "LAS", "city_code": "LAS"}, {"code": "XXX", "city_code": "NOPE"}]
+    names = places.parse(cities, airports)
+    assert names["NRT"] == names["HND"] == names["TYO"] == "Tokyo"
+    assert names["LAS"] == "Las Vegas"
+    assert "XXX" not in names
+    assert places.label("NRT", names) == "Tokyo (NRT)"
+    assert places.label("XXX", names) == "XXX"
+
+
+def test_place_names_cached_and_download_failure_is_harmless(conn, monkeypatch):
+    def boom(url):
+        raise OSError("offline")
+    monkeypatch.setattr(places, "_fetch", boom)
+    assert places.load(conn) == {}  # nothing saved yet, download failed: bare codes
+
+    monkeypatch.setattr(places, "_fetch", lambda url: [{"code": "NRT", "name": "Tokyo"}] if "cities" in url else [])
+    assert places.load(conn) == {"NRT": "Tokyo"}
+
+    monkeypatch.setattr(places, "_fetch", boom)
+    assert places.load(conn) == {"NRT": "Tokyo"}  # fresh enough: no download attempted, saved names used
+
+
+def test_email_body_shows_city_names():
+    d = __import__("cheapflights.models", fromlist=["Deal"]).Deal(
+        fare(389), baseline=1000, p25=900, samples=20, is_mistake=False)
+    text, body = notify.render([d], {"NRT": "Tokyo"})
+    assert "SFO → Tokyo (NRT)" in text and "Tokyo (NRT)" in body

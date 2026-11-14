@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import db, detector, history, notify, travelpayouts
+from . import db, detector, history, notify, places, travelpayouts
 from .config import Config
 
 log = logging.getLogger("cheapflights")
@@ -55,23 +55,26 @@ def main(argv: list[str] | None = None) -> None:
         from .models import Deal, Fare
         sample = Fare("SFO", "NRT", "2027-02-10", "2027-02-20", 389, airline="ZG", stops=0, return_stops=0)
         alt = Fare("SJC", "NRT", "2027-02-11", "2027-02-21", 412, airline="ZG", stops=1, return_stops=1)
-        notify.send([Deal(sample, baseline=980, p25=850, samples=40, is_mistake=False, alternatives=[alt])], cfg)
+        names = places.load(db.connect(cfg.db_path))
+        notify.send([Deal(sample, baseline=980, p25=850, samples=40, is_mistake=False, alternatives=[alt])],
+                    cfg, names)
         print(f"Sent a test email to {cfg.alert_to}")
         return
 
     conn = db.connect(cfg.db_path)
     # Restore monthly summaries from the CSVs (matters only if the database was lost).
     history.load(conn, cfg.history_dir)
+    names = places.load(conn)
     fares, deals = scan(conn, cfg)
     update_history(conn, cfg)
     print(f"Saw {len(fares)} fares, {len(deals)} new deal(s).")
     for d in deals:
         f = d.fare
-        print(f"  {f.origin}->{f.destination} {f.depart_date}/{f.return_date} ${f.price:,.0f} "
+        print(f"  {f.origin}->{places.label(f.destination, names)} {f.depart_date}/{f.return_date} ${f.price:,.0f} "
               f"({d.pct_off:.0%} off ${d.baseline:,.0f}, n={d.samples}){' MISTAKE?' if d.is_mistake else ''}"
               + "".join(f" | also {a.origin} ${a.price:,.0f}" for a in d.alternatives))
     if args.command == "run" and deals:
-        notify.send(deals, cfg)
+        notify.send(deals, cfg, names)
         for d in deals:
             db.record_alert(conn, cfg.origin_label(), d.fare.destination, d.fare.depart_month,
                             d.fare.price, d.baseline)
