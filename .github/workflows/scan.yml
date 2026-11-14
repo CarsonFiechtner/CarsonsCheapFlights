@@ -18,16 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       # Working database (the last year of individual prices). Each run restores
       # the newest copy from the Actions cache and saves a new one.
       - name: Restore price database
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: data/prices.sqlite
           key: prices-${{ github.run_id }}
@@ -68,7 +68,7 @@ jobs:
 
       - name: Save price database
         if: always() && hashFiles('data/prices.sqlite') != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: data/prices.sqlite
           key: prices-${{ github.run_id }}
@@ -102,7 +102,7 @@ jobs:
 
       - name: Back up price database
         if: steps.backup.outputs.due == 'true' && hashFiles('data/prices.sqlite.gz') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: prices-backup-${{ github.run_id }}
           path: data/prices.sqlite.gz
