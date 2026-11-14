@@ -39,8 +39,9 @@ every 4h ─▶ Travelpayouts cached fares ─▶ compare to route's 90-day hist
 2. **Gmail app password.** Google Account → Security → 2-Step Verification → App passwords.
 3. **GitHub secrets.** Repo → Settings → Secrets and variables → Actions → add `TRAVELPAYOUTS_TOKEN`,
    `SMTP_USER`, `SMTP_PASSWORD` and `ALERT_TO`.
-4. **Merge to the default branch.** Scheduled workflows only run from there. Then open Actions →
-   "Scan for flight deals" → *Run workflow* to try it.
+4. **Keep it on the default branch.** Scheduled workflows only run from the repo's default branch. Then open Actions →
+   "Scan for flight deals" → *Run workflow* to try it. Tick "Also send a sample deal email" to check
+   your email settings.
 
 ### Running locally instead
 
