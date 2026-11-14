@@ -38,21 +38,26 @@ def render(deals: list[Deal]) -> tuple[str, str]:
         f = d.fare
         url = google_flights_url(f)
         flag = "⚠️ possible mistake fare · " if d.is_mistake else ""
+        alts = [(a, google_flights_url(a)) for a in d.alternatives]
+        alt_text = "".join(f"  also from {a.origin}: ${a.price:,.0f} ({a.depart_date} → {a.return_date}) {u}\n"
+                           for a, u in alts)
+        alt_html = "".join(f"<br><span style='color:#666'>also from {html.escape(a.origin)}: "
+                           f"<a href='{html.escape(u)}'>${a.price:,.0f}</a></span>" for a, u in alts)
         text_lines.append(
             f"{f.origin} → {f.destination}  ${f.price:,.0f} (usually ~${d.baseline:,.0f}, {d.pct_off:.0%} off)\n"
             f"  {f.depart_date} → {f.return_date} · {f.airline or '?'} · out {_stops(f.stops)}, "
-            f"back {_stops(f.return_stops)}\n  {url}\n"
+            f"back {_stops(f.return_stops)}\n  {url}\n{alt_text}"
         )
         rows.append(
             f"<tr><td style='padding:8px 12px'><b>{html.escape(f.origin)} → {html.escape(f.destination)}</b><br>"
             f"<span style='color:#666'>{flag}{f.depart_date} → {f.return_date} · {html.escape(f.airline or '?')}"
-            f" · out {_stops(f.stops)}, back {_stops(f.return_stops)}</span></td>"
+            f" · out {_stops(f.stops)}, back {_stops(f.return_stops)}</span>{alt_html}</td>"
             f"<td style='padding:8px 12px;text-align:right'><b>${f.price:,.0f}</b><br>"
             f"<span style='color:#080'>{d.pct_off:.0%} off ~${d.baseline:,.0f}</span></td>"
             f"<td style='padding:8px 12px'><a href='{html.escape(url)}'>Check on Google Flights</a></td></tr>"
         )
     footer = ("Prices are cached and may have changed. Check them on Google Flights before booking. "
-              "'Usually' is the median price seen for this route over the last 90 days.")
+              "'Usually' is the median best price from your home airports over the last 90 days.")
     text = "\n".join(text_lines) + "\n" + footer
     body = (f"<table style='border-collapse:collapse;font-family:sans-serif'>{''.join(rows)}</table>"
             f"<p style='color:#888;font-size:12px'>{footer}</p>")

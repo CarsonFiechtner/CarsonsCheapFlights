@@ -1,8 +1,8 @@
 # Carson's Cheap Flights
 
 A personal fare tracker in the style of Going (formerly Scott's Cheap Flights). It watches round trips
-from **SFO and SJC to anywhere**, learns what each route normally costs, and emails you when a fare is
-far below normal.
+from **SFO and SJC to anywhere**, learns what each destination normally costs, and emails you when a
+fare is far below normal.
 
 ## How it works
 
@@ -15,12 +15,16 @@ every 4h ─▶ Travelpayouts cached fares ─▶ compare to route's 90-day hist
 1. **Scan**: for each origin and each of the next 10 months, it fetches the cheapest cached round trips
    to every destination from the [Travelpayouts Data API](https://support.travelpayouts.com/hc/en-us/articles/203956163).
    These are prices Aviasales users found recently. They're free, but they can be stale.
-2. **Remember**: it keeps the cheapest price per itinerary per day in SQLite (`data/prices.sqlite`).
-3. **Detect**: a fare is a deal when it's **≥40% below the route's median**, **≥$150 below it**,
+2. **Remember**: it keeps the cheapest price per itinerary per day in SQLite (`data/prices.sqlite`) for
+   a year, and a weekly summary of every destination forever (see below).
+3. **Detect**: SFO and SJC are treated as one home area. A destination's "normal price" is the
+   cheapest price from either airport for each itinerary, each day. A fare is a deal when it's
+   **≥40% below that median**, **≥$150 below it**,
    **at or below the 25th percentile**, and the route has **≥8 data points**. ≥70% off is flagged as a
    possible mistake fare. Itineraries with more than 2 stops each way are skipped.
-4. **Email**: you get one email per run with the best deal per route and month, each with a
-   pre-filled Google Flights link so you can confirm the price before booking. The same deal isn't
+4. **Email**: you get one email per run with one deal per destination and month: the cheaper airport,
+   with the other listed as "also from SJC: $480" when it's also a deal. Each has a pre-filled Google
+   Flights link so you can confirm the price before booking. The same destination and month isn't
    re-sent for 14 days unless the price drops another 10%.
 
 **Expect a quiet first week or two.** Most routes need about 8 data points before they can trigger a deal.
@@ -46,12 +50,27 @@ python -m cheapflights run          # scan and email deals
 
 No third-party packages are needed. Run the tests with `pip install pytest && pytest`.
 
-## Where the price history lives
+## Where the data lives
 
-On GitHub Actions the SQLite file is kept in the Actions cache: each run restores the newest copy and
-saves a new one. A copy is also uploaded as a workflow artifact weekly and on every manual run, kept
-for 30 days. If the cache is ever lost, download that artifact into `data/prices.sqlite`. Otherwise
-the tracker simply re-learns prices over a week or two.
+| What | Where | Kept for | If it's lost |
+|---|---|---|---|
+| Individual prices (`data/prices.sqlite`) | GitHub Actions cache, a new copy saved every run | 1 year (`RAW_KEEP_DAYS`) | Restored from the newest daily backup automatically |
+| Daily database backup (gzipped) | Workflow artifacts (`prices-backup-*`) | 7 days | n/a |
+| Weekly summaries | `history` branch, `weekly/YYYY-MM-DD.csv` | Forever | n/a: it's in git |
+
+Each weekly CSV has one row per origin, destination and departure month for that week, with the count,
+min, 25th percentile, median and max price. A week's file is written once the week ends (Monday–Sunday,
+UTC) and never changes. That's about 25 MB a year at most. These files keep long-term trends (seasonality, year over
+year) after the individual prices are deleted.
+
+**If the cache is lost** (GitHub only evicts it after 7 days with no runs, or when the repo passes
+10 GB of cache, oldest first), the next run restores the newest backup automatically. That loses at
+most a day of prices. If the backups have expired too, it starts fresh and re-learns normal prices,
+and the weekly summaries are still reloaded from the `history` branch.
+
+GitHub turns off scheduled workflows in public repos after 60 days without activity. The weekly
+commits to `history` should count as activity. If the workflow ever gets turned off, re-enable it
+from the Actions tab.
 
 ## Tuning
 
@@ -62,6 +81,5 @@ All thresholds are environment variables (see `.env.example`). Add them to the `
 ## Ideas for later
 
 - Add OAK as a third origin (`ORIGINS=SFO,SJC,OAK`).
-- Treat "same destination city, any SF Bay airport" as one deal.
 - Weekly summary email of the best fares, even when none count as deals.
 - Region filters or a destination wishlist with looser thresholds.

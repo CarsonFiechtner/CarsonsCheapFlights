@@ -9,10 +9,14 @@ concurrency:
   group: scan
   cancel-in-progress: false
 
+permissions:
+  contents: write   # to push weekly summaries to the `history` branch
+  actions: read     # to find the newest database backup if the cache is gone
+
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -20,14 +24,37 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The price history lives in the Actions cache. Each run restores the
-      # newest copy and saves a new one, so there's nothing to commit.
-      - name: Restore price history
+      # Working database (the last year of individual prices). Each run restores
+      # the newest copy from the Actions cache and saves a new one.
+      - name: Restore price database
         uses: actions/cache/restore@v4
         with:
           path: data/prices.sqlite
           key: prices-${{ github.run_id }}
           restore-keys: prices-
+
+      - name: Restore from newest backup if the cache is gone
+        if: hashFiles('data/prices.sqlite') == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq '
+            [.artifacts[] | select(.name | startswith("prices-backup-")) | select(.expired | not)]
+            | sort_by(.created_at) | last | .id // empty')
+          if [ -z "$id" ]; then echo "No backup found; starting fresh"; exit 0; fi
+          mkdir -p data
+          gh api "repos/${{ github.repository }}/actions/artifacts/$id/zip" > backup.zip
+          unzip -o backup.zip -d data && gunzip -f data/prices.sqlite.gz && rm backup.zip
+          echo "Restored database from backup artifact $id"
+
+      # Long-term weekly summaries live on the `history` branch, forever.
+      - name: Check out history branch
+        run: |
+          if git fetch --depth=1 origin history:refs/remotes/origin/history; then
+            git worktree add -B history history-tree origin/history
+          else
+            git worktree add --orphan -b history history-tree
+          fi
 
       - name: Scan and email deals
         env:
@@ -36,29 +63,44 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_TO: ${{ secrets.ALERT_TO }}
           ORIGINS: ${{ vars.ORIGINS || 'SFO,SJC' }}
+          HISTORY_DIR: history-tree/weekly
         run: python -m cheapflights run
 
-      - name: Save price history
+      - name: Save price database
         if: always() && hashFiles('data/prices.sqlite') != ''
         uses: actions/cache/save@v4
         with:
           path: data/prices.sqlite
           key: prices-${{ github.run_id }}
 
-      # Caches can be evicted, so keep a downloadable copy once a week
-      # (first run on Sunday, UTC) and on manual runs.
+      - name: Push new weekly summaries
+        if: always()
+        working-directory: history-tree
+        run: |
+          git add -A
+          if git diff --cached --quiet; then echo "No new weeks"; exit 0; fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Weekly price summaries $(date -u +%F)"
+          git push origin history
+
+      # The cache is only lost if no run happens for 7 days, so a daily copy is
+      # plenty: first run after midnight UTC, plus every manual run.
       - name: Check if backup is due
         id: backup
         run: |
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || \
-             { [ "$(date -u +%u)" = 7 ] && [ "$(date -u +%H)" -lt 4 ]; }; then
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || [ "$(date -u +%H)" -lt 4 ]; then
             echo "due=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Back up price history
+      - name: Compress database for backup
         if: steps.backup.outputs.due == 'true' && hashFiles('data/prices.sqlite') != ''
+        run: gzip -k -f data/prices.sqlite
+
+      - name: Back up price database
+        if: steps.backup.outputs.due == 'true' && hashFiles('data/prices.sqlite.gz') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: prices-backup
-          path: data/prices.sqlite
-          retention-days: 30
+          name: prices-backup-${{ github.run_id }}
+          path: data/prices.sqlite.gz
+          retention-days: 7

@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import db, detector, notify, travelpayouts
+from . import db, detector, history, notify, travelpayouts
 from .config import Config
 
 log = logging.getLogger("cheapflights")
@@ -28,8 +28,16 @@ def scan(conn, cfg: Config):
     # Score against history *before* adding this scan, so a fare can't make itself look normal.
     deals = detector.find_deals(conn, fares, cfg)
     db.insert_fares(conn, fares)
-    db.prune(conn, cfg.history_days + 30)
     return fares, deals
+
+
+def update_history(conn, cfg: Config) -> None:
+    """Summarize finished weeks, save them as CSVs, then drop old individual prices."""
+    weeks = history.rollup(conn)
+    files = history.export(conn, cfg.history_dir)
+    if weeks or files:
+        log.info("summarized weeks %s; wrote %d CSV file(s) to %s", weeks, len(files), cfg.history_dir)
+    db.prune(conn, max(cfg.raw_keep_days, cfg.history_days))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -46,21 +54,26 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "test-email":
         from .models import Deal, Fare
         sample = Fare("SFO", "NRT", "2027-02-10", "2027-02-20", 389, airline="ZG", stops=0, return_stops=0)
-        notify.send([Deal(sample, baseline=980, p25=850, samples=40, is_mistake=False)], cfg)
+        alt = Fare("SJC", "NRT", "2027-02-11", "2027-02-21", 412, airline="ZG", stops=1, return_stops=1)
+        notify.send([Deal(sample, baseline=980, p25=850, samples=40, is_mistake=False, alternatives=[alt])], cfg)
         print(f"Sent a test email to {cfg.alert_to}")
         return
 
     conn = db.connect(cfg.db_path)
+    # Restore weekly summaries from the CSVs (matters only if the database was lost).
+    history.load(conn, cfg.history_dir)
     fares, deals = scan(conn, cfg)
+    update_history(conn, cfg)
     print(f"Saw {len(fares)} fares, {len(deals)} new deal(s).")
     for d in deals:
         f = d.fare
         print(f"  {f.origin}->{f.destination} {f.depart_date}/{f.return_date} ${f.price:,.0f} "
-              f"({d.pct_off:.0%} off ${d.baseline:,.0f}, n={d.samples}){' MISTAKE?' if d.is_mistake else ''}")
+              f"({d.pct_off:.0%} off ${d.baseline:,.0f}, n={d.samples}){' MISTAKE?' if d.is_mistake else ''}"
+              + "".join(f" | also {a.origin} ${a.price:,.0f}" for a in d.alternatives))
     if args.command == "run" and deals:
         notify.send(deals, cfg)
         for d in deals:
-            db.record_alert(conn, d.fare.origin, d.fare.destination, d.fare.depart_month,
+            db.record_alert(conn, cfg.origin_label(), d.fare.destination, d.fare.depart_month,
                             d.fare.price, d.baseline)
         print(f"Emailed {len(deals)} deal(s) to {cfg.alert_to}")
 

@@ -78,15 +78,25 @@ def prune(conn: sqlite3.Connection, keep_days: int) -> int:
     return cur.rowcount
 
 
-def route_prices(conn: sqlite3.Connection, origin: str, destination: str, history_days: int) -> list[float]:
-    """Round-trip prices seen for a route in the lookback window (one per itinerary per day)."""
+def route_prices(conn: sqlite3.Connection, origins: list[str] | str, destination: str,
+                 history_days: int) -> list[float]:
+    """Round-trip prices to `destination` from any of `origins` in the lookback window.
+
+    One price per itinerary (dates) per day: the cheapest across the origins.
+    That makes the history "best price from the home area", which is what a
+    new fare from either airport gets compared against.
+    """
+    if isinstance(origins, str):
+        origins = [origins]
+    marks = ",".join("?" * len(origins))
     cur = conn.execute(
-        """
-        SELECT price FROM price_observations
-        WHERE origin = ? AND destination = ? AND return_date != ''
+        f"""
+        SELECT MIN(price) AS price FROM price_observations
+        WHERE origin IN ({marks}) AND destination = ? AND return_date != ''
           AND seen_day >= date('now', ?)
+        GROUP BY depart_date, return_date, seen_day
         """,
-        (origin, destination, f"-{history_days} days"),
+        (*origins, destination, f"-{history_days} days"),
     )
     return [r["price"] for r in cur]
 

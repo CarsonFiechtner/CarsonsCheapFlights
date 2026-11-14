@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from cheapflights import db, detector, notify, travelpayouts
+from cheapflights import db, detector, history, notify, travelpayouts
 from cheapflights.config import Config
 from cheapflights.models import Fare
 
@@ -109,7 +109,7 @@ def test_one_deal_per_route_month_keeps_cheapest(conn, cfg):
 
 def test_no_repeat_alert_unless_price_drops(conn, cfg):
     seed_history(conn, [1000] * 10)
-    db.record_alert(conn, "SFO", "NRT", "2027-02", 500, 1000)
+    db.record_alert(conn, "SFO/SJC", "NRT", "2027-02", 500, 1000)
     assert detector.find_deals(conn, [fare(480)], cfg) == []          # only 4% lower
     assert len(detector.find_deals(conn, [fare(440)], cfg)) == 1      # 12% lower
 
@@ -124,3 +124,57 @@ def test_email_rendering():
     assert notify.subject([d]) == "SFO→NRT $389 (61% off)"
     text, body = notify.render([d])
     assert "$389" in text and "Check on Google Flights" in body
+
+
+# --- SFO and SJC as one home area -------------------------------------------
+
+def test_baseline_pools_origins_taking_cheapest_per_itinerary(conn):
+    db.insert_fares(conn, [fare(900), fare(700, origin="SJC"), fare(650, origin="OAK")])
+    assert db.route_prices(conn, ["SFO", "SJC"], "NRT", 90) == [700]
+
+
+def test_same_deal_from_both_airports_is_one_alert(conn, cfg):
+    seed_history(conn, [1000] * 10)
+    deals = detector.find_deals(conn, [fare(450), fare(480, origin="SJC", depart="2027-02-12")], cfg)
+    assert len(deals) == 1
+    assert deals[0].fare.origin == "SFO"
+    assert [a.origin for a in deals[0].alternatives] == ["SJC"]
+    text, body = notify.render(deals)
+    assert "also from SJC: $480" in text and "also from SJC" in body
+
+
+def test_sjc_only_deal_still_found(conn, cfg):
+    seed_history(conn, [1000] * 10)
+    deals = detector.find_deals(conn, [fare(900), fare(400, origin="SJC")], cfg)
+    assert [(d.fare.origin, d.alternatives) for d in deals] == [("SJC", [])]
+
+
+def test_alert_dedupe_covers_both_airports(conn, cfg):
+    seed_history(conn, [1000] * 10)
+    db.record_alert(conn, cfg.origin_label(), "NRT", "2027-02", 450, 1000)
+    assert detector.find_deals(conn, [fare(440, origin="SJC")], cfg) == []
+
+
+# --- long-term weekly history -----------------------------------------------
+
+def test_weekly_rollup_export_and_reload(conn, tmp_path):
+    today = date.today()
+    this_monday = history.week_start(today)
+    last_monday = this_monday - timedelta(days=7)
+    for i, p in enumerate([400, 500, 600, 700]):
+        db.insert_fares(conn, [fare(p, depart=f"2027-02-{i + 1:02d}")],
+                        seen_day=(last_monday + timedelta(days=i)).isoformat())
+    db.insert_fares(conn, [fare(100, depart="2027-02-20")], seen_day=today.isoformat())  # unfinished week
+
+    assert history.rollup(conn, today) == [last_monday.isoformat()]
+    assert history.rollup(conn, today) == []  # already done
+    row = conn.execute("SELECT * FROM route_weekly").fetchone()
+    assert (row["n"], row["min_price"], row["median_price"], row["max_price"]) == (4, 400, 550, 700)
+
+    files = history.export(conn, str(tmp_path))
+    assert [f.name for f in files] == [f"{last_monday.isoformat()}.csv"]
+    assert history.export(conn, str(tmp_path)) == []  # written once
+
+    fresh = db.connect(":memory:")  # e.g. the cache was wiped
+    assert history.load(fresh, str(tmp_path)) == 1
+    assert fresh.execute("SELECT median_price FROM route_weekly").fetchone()[0] == 550

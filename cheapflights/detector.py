@@ -1,4 +1,11 @@
-"""Decide which fares are deals, compared to what the route normally costs."""
+"""Decide which fares are deals, compared to what the destination normally costs.
+
+All origins in the config (SFO and SJC by default) count as one home area:
+- the "normal price" for a destination is the cheapest price from any home
+  airport, per itinerary, per day;
+- there's at most one deal per destination and departure month, using the
+  cheapest airport, with the other airport listed as an alternative.
+"""
 
 from __future__ import annotations
 
@@ -44,7 +51,7 @@ def evaluate(fare: Fare, prices: list[float], cfg: Config) -> Deal | None:
 
 
 def should_alert(conn: sqlite3.Connection, deal: Deal, cfg: Config) -> bool:
-    prev = db.last_alert(conn, deal.fare.origin, deal.fare.destination, deal.fare.depart_month)
+    prev = db.last_alert(conn, cfg.origin_label(), deal.fare.destination, deal.fare.depart_month)
     if prev is None:
         return True
     if prev["age_days"] >= cfg.realert_days:
@@ -53,20 +60,28 @@ def should_alert(conn: sqlite3.Connection, deal: Deal, cfg: Config) -> bool:
 
 
 def find_deals(conn: sqlite3.Connection, fares: list[Fare], cfg: Config) -> list[Deal]:
-    """Best new deal per (origin, destination, departure month), best first."""
-    best: dict[tuple[str, str, str], Deal] = {}
-    cache: dict[tuple[str, str], list[float]] = {}
+    """Best new deal per (destination, departure month) across home airports, best first."""
+    # Cheapest qualifying deal per (destination, month, origin).
+    per_origin: dict[tuple[str, str], dict[str, Deal]] = {}
+    cache: dict[str, list[float]] = {}
     for fare in fares:
         if not passes_quality(fare, cfg):
             continue
-        key = (fare.origin, fare.destination)
-        if key not in cache:
-            cache[key] = db.route_prices(conn, fare.origin, fare.destination, cfg.history_days)
-        deal = evaluate(fare, cache[key], cfg)
+        if fare.destination not in cache:
+            cache[fare.destination] = db.route_prices(conn, cfg.origins, fare.destination, cfg.history_days)
+        deal = evaluate(fare, cache[fare.destination], cfg)
         if deal is None:
             continue
-        k = (fare.origin, fare.destination, fare.depart_month)
-        if k not in best or deal.fare.price < best[k].fare.price:
-            best[k] = deal
-    deals = [d for d in best.values() if should_alert(conn, d, cfg)]
+        group = per_origin.setdefault((fare.destination, fare.depart_month), {})
+        cur = group.get(fare.origin)
+        if cur is None or fare.price < cur.fare.price:
+            group[fare.origin] = deal
+
+    deals = []
+    for group in per_origin.values():
+        ranked = sorted(group.values(), key=lambda d: d.fare.price)
+        best = ranked[0]
+        best.alternatives = [d.fare for d in ranked[1:]]
+        if should_alert(conn, best, cfg):
+            deals.append(best)
     return sorted(deals, key=lambda d: (not d.is_mistake, -d.pct_off))

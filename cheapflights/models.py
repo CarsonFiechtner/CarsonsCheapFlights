@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -23,11 +23,14 @@ class Fare:
 
 @dataclass
 class Deal:
-    fare: Fare
-    baseline: float     # median price for the route
-    p25: float          # 25th percentile for the route
+    fare: Fare          # the cheapest fare found, from whichever home airport
+    baseline: float     # median best-home-area price for this destination
+    p25: float          # 25th percentile of the same
     samples: int
     is_mistake: bool
+    # Cheapest fare from each *other* home airport for the same destination and
+    # month, when it's also a deal (e.g. "also from SJC: $420").
+    alternatives: list[Fare] = field(default_factory=list)
 
     @property
     def pct_off(self) -> float:
