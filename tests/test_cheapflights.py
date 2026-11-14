@@ -25,11 +25,12 @@ def cfg():
     return Config()
 
 
-def seed_history(conn, prices, dest="NRT"):
-    # Spread prices across distinct itineraries and days, like real scans.
+def seed_history(conn, prices, dest="NRT", month="2027-03"):
+    # Spread prices across distinct week-long itineraries and days, like real scans.
     for i, p in enumerate(prices):
-        d = f"2027-03-{(i % 28) + 1:02d}"
-        db.insert_fares(conn, [fare(p, dest=dest, depart=d, ret="2027-04-01")], seen_day=days_ago(i % 60))
+        dep = date.fromisoformat(f"{month}-{(i % 28) + 1:02d}")
+        db.insert_fares(conn, [fare(p, dest=dest, depart=dep.isoformat(), ret=(dep + timedelta(days=7)).isoformat())],
+                        seen_day=days_ago(i % 60))
 
 
 def test_parse_response_handles_good_and_bad_items():
@@ -86,7 +87,7 @@ def test_cheap_route_needs_minimum_dollar_savings(conn, cfg):
 def test_single_scan_is_not_enough_history(conn, cfg):
     # Lots of prices, but all seen on one day (one scan): not a baseline yet.
     for i in range(20):
-        db.insert_fares(conn, [fare(1000, depart=f"2027-03-{i + 1:02d}", ret="2027-04-01")])
+        db.insert_fares(conn, [fare(1000, depart=f"2027-03-{i + 1:02d}", ret=f"2027-03-{i + 8:02d}")])
     assert detector.find_deals(conn, [fare(300)], cfg) == []
 
 
@@ -135,6 +136,62 @@ def test_email_rendering():
 
 
 # --- SFO and SJC as one home area -------------------------------------------
+
+# --- seasonality, trip length, problem alerts ----------------------------------
+
+def test_same_month_baseline_beats_all_months(conn, cfg):
+    # Summer is expensive, winter cheap. A $500 February fare is normal for
+    # February, even though it's half the all-months median.
+    seed_history(conn, [1400] * 20, month="2027-07")
+    seed_history(conn, [520, 540, 500, 560, 530, 510, 550, 545, 525, 535], month="2027-02")
+    assert detector.find_deals(conn, [fare(500)], cfg) == []
+    deals = detector.find_deals(conn, [fare(250)], cfg)  # half of February's normal
+    assert len(deals) == 1 and deals[0].baseline_month == "2027-02"
+    text, _ = notify.render(deals)
+    assert "usually ~$532 for Feb trips" in text
+
+
+def test_falls_back_to_all_months_without_month_history(conn, cfg):
+    seed_history(conn, [1000] * 10, month="2027-03")
+    deals = detector.find_deals(conn, [fare(450)], cfg)  # February fare, only March history
+    assert len(deals) == 1 and deals[0].baseline_month is None
+
+
+def test_trip_length_limits(conn, cfg):
+    seed_history(conn, [1000] * 10)
+    too_short = fare(300, depart="2027-02-10", ret="2027-02-11")
+    too_long = fare(300, depart="2027-02-01", ret="2027-03-15")
+    assert detector.find_deals(conn, [too_short, too_long], cfg) == []
+    # Odd-length trips don't count toward the normal price either.
+    db.insert_fares(conn, [fare(5, depart="2027-03-01", ret="2027-03-02")], seen_day=days_ago(1))
+    assert 5 not in db.route_prices(conn, ["SFO"], "NRT", 90, nights=cfg.nights)
+
+
+def test_problem_email_at_most_daily(conn):
+    assert db.claim_problem_email(conn, "2026-11-14")
+    assert not db.claim_problem_email(conn, "2026-11-14")
+    assert db.claim_problem_email(conn, "2026-11-15")
+
+
+def test_zero_fares_raises_and_reports(conn, cfg, monkeypatch):
+    from cheapflights import __main__ as cli
+    cfg.travelpayouts_token = "x"
+    monkeypatch.setattr(travelpayouts, "fetch_cheapest_anywhere", lambda *a, **k: [])
+    with pytest.raises(cli.TrackerProblem, match="0 fares"):
+        cli.scan(conn, cfg)
+
+    def denied(*a, **k):
+        raise OSError("HTTP Error 401: Unauthorized")
+    monkeypatch.setattr(travelpayouts, "fetch_cheapest_anywhere", denied)
+    with pytest.raises(cli.TrackerProblem, match="401"):
+        cli.scan(conn, cfg)
+
+    sent = []
+    monkeypatch.setattr(notify, "send_problem", lambda cfg, problem: sent.append(problem))
+    cli.report_problem(conn, cfg, "broken")
+    cli.report_problem(conn, cfg, "still broken")  # same day: no second email
+    assert sent == ["broken"]
+
 
 def test_baseline_pools_origins_taking_cheapest_per_itinerary(conn):
     db.insert_fares(conn, [fare(900), fare(700, origin="SJC"), fare(650, origin="OAK")])

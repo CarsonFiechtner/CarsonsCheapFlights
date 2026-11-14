@@ -38,6 +38,8 @@ class Config:
     min_history_days: int = 7        # ...on at least this many different days
     mistake_pct_off: float = 0.70    # 70%+ off gets flagged as a likely mistake fare
     max_stops: int = 2               # ignore itineraries with more stops each way
+    min_trip_nights: int = 3         # ignore round trips shorter...
+    max_trip_nights: int = 21        # ...or longer than this
     history_days: int = 90           # how far back the "normal price" looks
     raw_keep_days: int = 365         # delete individual prices older than this (monthly summaries are kept forever)
     history_dir: str = "data/history"  # monthly summary CSVs; on GitHub this is on the `history` branch
@@ -50,6 +52,10 @@ class Config:
     smtp_user: str = ""
     smtp_password: str = ""
     alert_to: str = ""
+
+    @property
+    def nights(self) -> tuple[int, int]:
+        return self.min_trip_nights, self.max_trip_nights
 
     def origin_label(self) -> str:
         """All origins are treated as one home area, e.g. 'SFO/SJC'."""
@@ -70,6 +76,8 @@ class Config:
         c.min_history_days = int(e("MIN_HISTORY_DAYS", c.min_history_days))
         c.mistake_pct_off = float(e("MISTAKE_PCT_OFF", c.mistake_pct_off))
         c.max_stops = int(e("MAX_STOPS", c.max_stops))
+        c.min_trip_nights = int(e("MIN_TRIP_NIGHTS", c.min_trip_nights))
+        c.max_trip_nights = int(e("MAX_TRIP_NIGHTS", c.max_trip_nights))
         c.history_days = int(e("HISTORY_DAYS", c.history_days))
         c.raw_keep_days = int(e("RAW_KEEP_DAYS", c.raw_keep_days))
         c.history_dir = e("HISTORY_DIR", c.history_dir)

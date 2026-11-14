@@ -5,11 +5,32 @@ from __future__ import annotations
 import html
 import smtplib
 import urllib.parse
+from datetime import date
 from email.message import EmailMessage
 
 from .config import Config
 from .models import Deal, Fare
 from .places import label
+
+
+def _usually(d: Deal) -> str:
+    """'usually ~$980 for Feb trips' or 'usually ~$980'."""
+    when = ""
+    if d.baseline_month:
+        when = " for " + date.fromisoformat(d.baseline_month + "-01").strftime("%b") + " trips"
+    return f"usually ~${d.baseline:,.0f}{when}"
+
+
+def send_problem(cfg: Config, problem: str) -> None:
+    """Tell the user the tracker itself is broken (no fares, crashes)."""
+    msg = EmailMessage()
+    msg["Subject"] = "⚠️ Flight tracker problem"
+    msg["From"] = cfg.smtp_user
+    msg["To"] = cfg.alert_to
+    msg.set_content(
+        f"{problem}\n\nThe tracker will keep retrying every run, but you'll get at most one of these "
+        "emails a day. Check the latest run in the repo's Actions tab for details.")
+    _deliver(msg, cfg)
 
 
 def google_flights_url(fare: Fare) -> str:
@@ -47,7 +68,7 @@ def render(deals: list[Deal], names: dict[str, str] | None = None) -> tuple[str,
         alt_html = "".join(f"<br><span style='color:#666'>also from {html.escape(a.origin)}: "
                            f"<a href='{html.escape(u)}'>${a.price:,.0f}</a></span>" for a, u in alts)
         text_lines.append(
-            f"{f.origin} → {label(f.destination, names)}  ${f.price:,.0f} (usually ~${d.baseline:,.0f}, {d.pct_off:.0%} off)\n"
+            f"{f.origin} → {label(f.destination, names)}  ${f.price:,.0f} ({_usually(d)}, {d.pct_off:.0%} off)\n"
             f"  {f.depart_date} → {f.return_date} · {f.airline or '?'} · out {_stops(f.stops)}, "
             f"back {_stops(f.return_stops)}\n  {url}\n{alt_text}"
         )
@@ -56,11 +77,12 @@ def render(deals: list[Deal], names: dict[str, str] | None = None) -> tuple[str,
             f"<span style='color:#666'>{flag}{f.depart_date} → {f.return_date} · {html.escape(f.airline or '?')}"
             f" · out {_stops(f.stops)}, back {_stops(f.return_stops)}</span>{alt_html}</td>"
             f"<td style='padding:8px 12px;text-align:right'><b>${f.price:,.0f}</b><br>"
-            f"<span style='color:#080'>{d.pct_off:.0%} off ~${d.baseline:,.0f}</span></td>"
+            f"<span style='color:#080'>{d.pct_off:.0%} off</span><br>"
+            f"<span style='color:#666;font-size:12px'>{_usually(d)}</span></td>"
             f"<td style='padding:8px 12px'><a href='{html.escape(url)}'>Check on Google Flights</a></td></tr>"
         )
     footer = ("Prices are cached and may have changed. Check them on Google Flights before booking. "
-              "'Usually' is the median best price from your home airports over the last 90 days.")
+              "'Usually' is the median best price from your home airports over the last 90 days, for the same travel month when there's enough data.")
     text = "\n".join(text_lines) + "\n" + footer
     body = (f"<table style='border-collapse:collapse;font-family:sans-serif'>{''.join(rows)}</table>"
             f"<p style='color:#888;font-size:12px'>{footer}</p>")
@@ -68,8 +90,6 @@ def render(deals: list[Deal], names: dict[str, str] | None = None) -> tuple[str,
 
 
 def send(deals: list[Deal], cfg: Config, names: dict[str, str] | None = None) -> None:
-    if not (cfg.smtp_user and cfg.smtp_password and cfg.alert_to):
-        raise RuntimeError("SMTP_USER, SMTP_PASSWORD and ALERT_TO must be set to send email")
     msg = EmailMessage()
     msg["Subject"] = subject(deals, names)
     msg["From"] = cfg.smtp_user
@@ -77,6 +97,12 @@ def send(deals: list[Deal], cfg: Config, names: dict[str, str] | None = None) ->
     text, body = render(deals, names)
     msg.set_content(text)
     msg.add_alternative(body, subtype="html")
+    _deliver(msg, cfg)
+
+
+def _deliver(msg: EmailMessage, cfg: Config) -> None:
+    if not (cfg.smtp_user and cfg.smtp_password and cfg.alert_to):
+        raise RuntimeError("SMTP_USER, SMTP_PASSWORD and ALERT_TO must be set to send email")
     with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=30) as s:
         s.starttls()
         s.login(cfg.smtp_user, cfg.smtp_password)

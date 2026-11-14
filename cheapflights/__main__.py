@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 
 from . import db, detector, history, notify, places, travelpayouts
 from .config import Config
@@ -12,19 +11,31 @@ from .config import Config
 log = logging.getLogger("cheapflights")
 
 
+class TrackerProblem(RuntimeError):
+    """The tracker can't do its job (e.g. the fare API returns nothing)."""
+
+
 def scan(conn, cfg: Config):
     if not cfg.travelpayouts_token:
-        sys.exit("TRAVELPAYOUTS_TOKEN is not set")
-    fares = []
+        raise TrackerProblem("TRAVELPAYOUTS_TOKEN is not set.")
+    fares, requests, last_error = [], 0, None
     for origin in cfg.origins:
         for month in travelpayouts.month_strings(cfg.months_ahead):
+            requests += 1
             try:
                 got = travelpayouts.fetch_cheapest_anywhere(origin, month, cfg.travelpayouts_token, cfg.currency)
             except Exception as exc:
                 log.error("scan %s %s failed: %s", origin, month, exc)
+                last_error = exc
                 continue
             log.info("%s %s: %d fares", origin, month, len(got))
             fares.extend(got)
+    if not fares:
+        if last_error is not None:
+            raise TrackerProblem(f"All {requests} Travelpayouts requests failed. Last error: {last_error}. "
+                                 "If it says 401 or 403, the API token may have expired or been revoked.")
+        raise TrackerProblem(f"Travelpayouts returned 0 fares across {requests} requests. "
+                             "Their API may have changed.")
     # Score against history *before* adding this scan, so a fare can't make itself look normal.
     deals = detector.find_deals(conn, fares, cfg)
     db.insert_fares(conn, fares)
@@ -38,6 +49,16 @@ def update_history(conn, cfg: Config) -> None:
     if months or files:
         log.info("summarized %s; wrote %d CSV file(s) to %s", months, len(files), cfg.history_dir)
     db.prune(conn, max(cfg.raw_keep_days, cfg.history_days, history.MIN_RAW_KEEP_DAYS))
+
+
+def report_problem(conn, cfg: Config, problem: str) -> None:
+    """Email the user about a broken tracker, at most once a day."""
+    try:
+        if conn is None or db.claim_problem_email(conn):
+            notify.send_problem(cfg, problem)
+            log.info("emailed a tracker-problem warning")
+    except Exception as exc:  # e.g. email itself is broken; the failed GitHub run still shows it
+        log.error("couldn't send the problem email: %s", exc)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -56,12 +77,24 @@ def main(argv: list[str] | None = None) -> None:
         sample = Fare("SFO", "NRT", "2027-02-10", "2027-02-20", 389, airline="ZG", stops=0, return_stops=0)
         alt = Fare("SJC", "NRT", "2027-02-11", "2027-02-21", 412, airline="ZG", stops=1, return_stops=1)
         names = places.load(db.connect(cfg.db_path))
-        notify.send([Deal(sample, baseline=980, p25=850, samples=40, is_mistake=False, alternatives=[alt])],
+        notify.send([Deal(sample, baseline=980, p25=850, samples=40, is_mistake=False, alternatives=[alt],
+                          baseline_month="2027-02")],
                     cfg, names)
         print(f"Sent a test email to {cfg.alert_to}")
         return
 
-    conn = db.connect(cfg.db_path)
+    conn = None
+    try:
+        conn = db.connect(cfg.db_path)
+        run(conn, cfg, send_email=args.command == "run")
+    except Exception as exc:
+        if args.command == "run":
+            what = str(exc) if isinstance(exc, TrackerProblem) else f"The tracker crashed: {type(exc).__name__}: {exc}"
+            report_problem(conn, cfg, what)
+        raise
+
+
+def run(conn, cfg: Config, send_email: bool) -> None:
     # Restore monthly summaries from the CSVs (matters only if the database was lost).
     history.load(conn, cfg.history_dir)
     names = places.load(conn)
@@ -73,7 +106,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {f.origin}->{places.label(f.destination, names)} {f.depart_date}/{f.return_date} ${f.price:,.0f} "
               f"({d.pct_off:.0%} off ${d.baseline:,.0f}, n={d.samples}){' MISTAKE?' if d.is_mistake else ''}"
               + "".join(f" | also {a.origin} ${a.price:,.0f}" for a in d.alternatives))
-    if args.command == "run" and deals:
+    if send_email and deals:
         notify.send(deals, cfg, names)
         for d in deals:
             db.record_alert(conn, cfg.origin_label(), d.fare.destination, d.fare.depart_month,

@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS alerts_sent (
     sent_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_route ON alerts_sent (origin, destination, depart_month);
+
+CREATE TABLE IF NOT EXISTS problems_sent (
+    day TEXT PRIMARY KEY            -- YYYY-MM-DD a "tracker problem" email went out
+);
 """
 
 
@@ -78,43 +82,46 @@ def prune(conn: sqlite3.Connection, keep_days: int) -> int:
     return cur.rowcount
 
 
+def _history_filter(origins: list[str] | str, destination: str, history_days: int,
+                    depart_month: str | None, nights: tuple[int, int] | None) -> tuple[str, list]:
+    if isinstance(origins, str):
+        origins = [origins]
+    where = [f"origin IN ({','.join('?' * len(origins))})", "destination = ?", "return_date != ''",
+             "seen_day >= date('now', ?)"]
+    params: list = [*origins, destination, f"-{history_days} days"]
+    if depart_month:
+        where.append("substr(depart_date, 1, 7) = ?")
+        params.append(depart_month)
+    if nights:
+        where.append("julianday(return_date) - julianday(depart_date) BETWEEN ? AND ?")
+        params.extend(nights)
+    return " AND ".join(where), params
+
+
 def route_prices(conn: sqlite3.Connection, origins: list[str] | str, destination: str,
-                 history_days: int) -> list[float]:
+                 history_days: int, depart_month: str | None = None,
+                 nights: tuple[int, int] | None = None) -> list[float]:
     """Round-trip prices to `destination` from any of `origins` in the lookback window.
 
     One price per itinerary (dates) per day: the cheapest across the origins.
     That makes the history "best price from the home area", which is what a
-    new fare from either airport gets compared against.
+    new fare from either airport gets compared against. Optionally limited to
+    one departure month (YYYY-MM) and a trip length range in nights.
     """
-    if isinstance(origins, str):
-        origins = [origins]
-    marks = ",".join("?" * len(origins))
+    where, params = _history_filter(origins, destination, history_days, depart_month, nights)
     cur = conn.execute(
-        f"""
-        SELECT MIN(price) AS price FROM price_observations
-        WHERE origin IN ({marks}) AND destination = ? AND return_date != ''
-          AND seen_day >= date('now', ?)
-        GROUP BY depart_date, return_date, seen_day
-        """,
-        (*origins, destination, f"-{history_days} days"),
-    )
+        f"SELECT MIN(price) AS price FROM price_observations WHERE {where}"
+        " GROUP BY depart_date, return_date, seen_day", params)
     return [r["price"] for r in cur]
 
 
 def route_history_days(conn: sqlite3.Connection, origins: list[str] | str, destination: str,
-                       history_days: int) -> int:
-    """How many different days we've seen round-trip prices to `destination` on."""
-    if isinstance(origins, str):
-        origins = [origins]
-    marks = ",".join("?" * len(origins))
+                       history_days: int, depart_month: str | None = None,
+                       nights: tuple[int, int] | None = None) -> int:
+    """How many different days we've seen matching round-trip prices to `destination` on."""
+    where, params = _history_filter(origins, destination, history_days, depart_month, nights)
     return conn.execute(
-        f"""
-        SELECT COUNT(DISTINCT seen_day) FROM price_observations
-        WHERE origin IN ({marks}) AND destination = ? AND return_date != ''
-          AND seen_day >= date('now', ?)
-        """,
-        (*origins, destination, f"-{history_days} days"),
-    ).fetchone()[0]
+        f"SELECT COUNT(DISTINCT seen_day) FROM price_observations WHERE {where}", params).fetchone()[0]
 
 
 def last_alert(conn: sqlite3.Connection, origin: str, destination: str, depart_month: str):
@@ -133,3 +140,11 @@ def record_alert(conn: sqlite3.Connection, origin: str, destination: str, depart
         (origin, destination, depart_month, price, baseline),
     )
     conn.commit()
+
+
+def claim_problem_email(conn: sqlite3.Connection, day: str | None = None) -> bool:
+    """True the first time it's called on a given day, so problem emails go out at most daily."""
+    cur = conn.execute("INSERT OR IGNORE INTO problems_sent (day) VALUES (?)",
+                       (day or date.today().isoformat(),))
+    conn.commit()
+    return cur.rowcount == 1

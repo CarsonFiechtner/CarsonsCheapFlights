@@ -30,6 +30,8 @@ def route_stats(prices: list[float]) -> tuple[float, float] | None:
 def passes_quality(fare: Fare, cfg: Config) -> bool:
     if fare.return_date is None:
         return False  # round trips only for now; one-way prices aren't comparable
+    if not cfg.min_trip_nights <= fare.nights <= cfg.max_trip_nights:
+        return False  # 1-night or 2-month "trips" aren't useful even when cheap
     for s in (fare.stops, fare.return_stops):
         if s is not None and s > cfg.max_stops:
             return False
@@ -68,17 +70,30 @@ def find_deals(conn: sqlite3.Connection, fares: list[Fare], cfg: Config) -> list
     """Best new deal per (destination, departure month) across home airports, best first."""
     # Cheapest qualifying deal per (destination, month, origin).
     per_origin: dict[tuple[str, str], dict[str, Deal]] = {}
-    cache: dict[str, tuple[list[float], int]] = {}
+    cache: dict[tuple[str, str | None], tuple[list[float], int]] = {}
+
+    def history(dest: str, month: str | None) -> tuple[list[float], int]:
+        key = (dest, month)
+        if key not in cache:
+            cache[key] = (
+                db.route_prices(conn, cfg.origins, dest, cfg.history_days, month, cfg.nights),
+                db.route_history_days(conn, cfg.origins, dest, cfg.history_days, month, cfg.nights),
+            )
+        return cache[key]
+
     for fare in fares:
         if not passes_quality(fare, cfg):
             continue
-        if fare.destination not in cache:
-            cache[fare.destination] = (
-                db.route_prices(conn, cfg.origins, fare.destination, cfg.history_days),
-                db.route_history_days(conn, cfg.origins, fare.destination, cfg.history_days),
-            )
-        prices, days_seen = cache[fare.destination]
-        deal = evaluate(fare, prices, cfg, days_seen)
+        # Prefer the normal price for the same travel month (fares are seasonal);
+        # fall back to all months only until that month has enough history.
+        month_prices, month_days = history(fare.destination, fare.depart_month)
+        if len(month_prices) >= cfg.min_samples and month_days >= cfg.min_history_days:
+            deal = evaluate(fare, month_prices, cfg, month_days)
+            if deal:
+                deal.baseline_month = fare.depart_month
+        else:
+            all_prices, all_days = history(fare.destination, None)
+            deal = evaluate(fare, all_prices, cfg, all_days)
         if deal is None:
             continue
         group = per_origin.setdefault((fare.destination, fare.depart_month), {})

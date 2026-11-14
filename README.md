@@ -18,7 +18,9 @@ every 4h ─▶ Travelpayouts cached fares ─▶ compare to route's 90-day hist
 2. **Remember**: it keeps the cheapest price per itinerary per day in SQLite (`data/prices.sqlite`) for
    a year, and a monthly summary of every destination forever (see below).
 3. **Detect**: SFO and SJC are treated as one home area. A destination's "normal price" is the
-   cheapest price from either airport for each itinerary, each day. A fare is a deal when it's
+   cheapest price from either airport for each itinerary, each day, **for the same travel month**
+   (fares are seasonal; it falls back to all months until a month has enough data). Only trips of
+   3–21 nights count, both for deals and for the normal price. A fare is a deal when it's
    **≥40% below that median**, **≥$200 below it**,
    **at or below the 25th percentile**, and the destination has **≥8 prices seen on ≥7 different days**. ≥70% off is flagged as a
    possible mistake fare. Itineraries with more than 2 stops each way are skipped.
@@ -76,6 +78,12 @@ and the monthly summaries are still reloaded from the `history` branch.
 GitHub turns off scheduled workflows in public repos after 60 days without activity. The monthly
 commit to `history` keeps the repo active. If it ever gets turned off anyway (GitHub emails you
 first), re-enable it from the Actions tab.
+
+## When something breaks
+
+If a run gets no fares at all (expired token, API change) or crashes, it emails you a
+"⚠️ Flight tracker problem" message (at most once a day) and the run shows as failed in the Actions
+tab. It keeps retrying every 4 hours, so a temporary outage fixes itself.
 
 ## Tuning
 
