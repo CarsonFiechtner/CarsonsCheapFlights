@@ -99,7 +99,7 @@ def test_not_enough_history(conn, cfg):
 def test_mistake_fare_flagged_and_sorted_first(conn, cfg):
     seed_history(conn, [1000] * 10)
     seed_history(conn, [1500] * 10, dest="CDG")
-    deals = detector.find_deals(conn, [fare(550), fare(250, dest="CDG")], cfg)
+    deals = detector.find_deals(conn, [fare(450), fare(250, dest="CDG")], cfg)
     assert [d.fare.destination for d in deals] == ["CDG", "NRT"]
     assert deals[0].is_mistake
 
@@ -155,6 +155,14 @@ def test_falls_back_to_all_months_without_month_history(conn, cfg):
     seed_history(conn, [1000] * 10, month="2027-03")
     deals = detector.find_deals(conn, [fare(450)], cfg)  # February fare, only March history
     assert len(deals) == 1 and deals[0].baseline_month is None
+
+
+def test_price_cap(conn, cfg):
+    seed_history(conn, [2000] * 10, dest="CDG")
+    assert detector.find_deals(conn, [fare(550, dest="CDG")], cfg) == []   # 72% off but over $500
+    assert len(detector.find_deals(conn, [fare(500, dest="CDG")], cfg)) == 1
+    # Expensive fares still count toward the normal price, so they aren't dropped from history.
+    assert 2000 in db.route_prices(conn, ["SFO"], "CDG", 90)
 
 
 def test_trip_length_limits(conn, cfg):

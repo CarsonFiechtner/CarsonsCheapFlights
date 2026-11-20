@@ -21,7 +21,7 @@ every 4h ─▶ Travelpayouts cached fares ─▶ compare to route's 90-day hist
    cheapest price from either airport for each itinerary, each day, **for the same travel month**
    (fares are seasonal; it falls back to all months until a month has enough data). Only trips of
    3–21 nights count, both for deals and for the normal price. A fare is a deal when it's
-   **≥40% below that median**, **≥$200 below it**,
+   **≥40% below that median**, **≥$200 below it**, **$500 or less** (`MAX_PRICE`),
    **at or below the 25th percentile**, and the destination has **≥8 prices seen on ≥7 different days**. ≥70% off is flagged as a
    possible mistake fare. Itineraries with more than 2 stops each way are skipped.
 4. **Email**: you get one email per run with one deal per destination and month: the cheaper airport,

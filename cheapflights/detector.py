@@ -30,6 +30,8 @@ def route_stats(prices: list[float]) -> tuple[float, float] | None:
 def passes_quality(fare: Fare, cfg: Config) -> bool:
     if fare.return_date is None:
         return False  # round trips only for now; one-way prices aren't comparable
+    if fare.price > cfg.max_price:
+        return False  # too expensive to alert on, however good the discount
     if not cfg.min_trip_nights <= fare.nights <= cfg.max_trip_nights:
         return False  # 1-night or 2-month "trips" aren't useful even when cheap
     for s in (fare.stops, fare.return_stops):
